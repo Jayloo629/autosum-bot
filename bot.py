@@ -1,86 +1,98 @@
 import datetime
-from telegram import Update
+import json
+import os
+import re
+
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
-# Sample data: replace this with your real data source
-data = [
-    {'date': '2025-07-10', 'currency': 'USD', 'amount': 100},
-    {'date': '2025-07-10', 'currency': 'KHR', 'amount': 400000},
-    {'date': '2025-07-09', 'currency': 'USD', 'amount': 50},
-    {'date': '2025-07-09', 'currency': 'KHR', 'amount': 200000},
-    # Add more entries as needed
-]
+DATA_FILE = 'income.json'
 
-async def send_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cmd = update.message.text.strip().lower()
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    return []
 
-    if cmd == '/today':
-        target_date = datetime.datetime.now().strftime('%Y-%m-%d')
-        label = "សរុបប្រតិបត្តិការ ថ្ងៃទី " + datetime.datetime.now().strftime('%d %b %Y')
-    elif cmd == '/yesterday':
-        target_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
-        label = "សរុបប្រតិបត្តិការ ម្សិលមិញ"
-    elif cmd == '/total':
-        target_date = None
-        label = "សរុបប្រតិបត្តិការទាំងអស់"
-    elif cmd.startswith('/day '):
-        try:
-            target_date = cmd.split()[1]
-            # Validate date format
-            datetime.datetime.strptime(target_date, '%Y-%m-%d')
-            label = f"សរុបប្រតិបត្តិការ ថ្ងៃទី {target_date}"
-        except Exception:
-            await update.message.reply_text("សូមប្រើទ្រង់ទ្រាយកាលបរិច្ឆេទ៖ /day YYYY-MM-DD")
-            return
-    else:
-        await update.message.reply_text(
-            "Commands supported:\n"
-            "/today - ប្រចាំថ្ងៃ\n"
-            "/yesterday - ប្រចាំម្សិលមិញ\n"
-            "/total - សរុបប្រតិបត្តិការទាំងអស់\n"
-            "/day YYYY-MM-DD - របាយការណ៍ប្រចាំថ្ងៃជាក់លាក់"
-        )
-        return
+def save_data(data):
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f)
 
-    # Summarize payments
+def extract_amounts(text):
+    khr_match = re.search(r"ចំនួន\s*([\d,]+)\s*រៀល", text)
+    usd_match = re.search(r"\$([\d\.]+)", text)
+
+    khr = int(khr_match.group(1).replace(',', '')) if khr_match else 0
+    usd = float(usd_match.group(1)) if usd_match else 0
+    return usd, khr
+
+async def send_summary_by_date(update: Update, target_date):
+    data = load_data()
+
     total_usd = 0
     total_khr = 0
     count_usd = 0
     count_khr = 0
-
     for entry in data:
-        if target_date is None or entry['date'] == target_date:
-            if entry['currency'] == 'USD':
-                total_usd += entry['amount']
+        if entry['date'] == target_date:
+            if entry['usd'] > 0:
+                total_usd += entry['usd']
                 count_usd += 1
-            elif entry['currency'] == 'KHR':
-                total_khr += entry['amount']
+            if entry['khr'] > 0:
+                total_khr += entry['khr']
                 count_khr += 1
 
     reply = (
-        f"{label}\n"
+        f"សរុបប្រតិបត្តិការ ថ្ងៃទី {target_date}\n"
         f"៛ (KHR): {total_khr:,}   ចំនួនប្រតិបតិ្តការ​សរុប: {count_khr}\n"
         f"$ (USD): {total_usd:.2f}   ចំនួនប្រតិបតិ្តការ​សរុប: {count_usd}"
     )
     await update.message.reply_text(reply)
 
-async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("សូមអភ័យទោស, មិនទាន់គាំទ្រកម្មង់នេះទេ។ សូមប្រើ /today, /yesterday, /total ឬ /day YYYY-MM-DD។")
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
-def main():
-    # Replace with your bot token
-    TOKEN = "YOUR_BOT_TOKEN"
+    if text.startswith("Jul"):
+        date = "2025-" + datetime.datetime.strptime(text, "%b %d").strftime("%m-%d")
+        await send_summary_by_date(update, date)
+        return
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    if text == "⬅ ត្រឡប់ក្រោយ":
+        await show_menu(update, context)
+        return
 
-    # Add handlers for commands
-    app.add_handler(CommandHandler(["today", "yesterday", "total", "day"], send_summary))
+    usd, khr = extract_amounts(text)
+    if usd or khr:
+        data = load_data()
+        data.append({
+            "date": datetime.datetime.now().strftime('%Y-%m-%d'),
+            "usd": usd,
+            "khr": khr
+        })
+        save_data(data)
+        await update.message.reply_text("✅ Payment recorded!")
+        return
 
-    # Catch all other commands
-    app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [KeyboardButton("ប្រចាំថ្ងៃ")],
+        [KeyboardButton("ប្រចាំសប្ដាហ៍")],
+        [KeyboardButton("ប្រចាំខែ")]
+    ]
+    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("📊 សូមជ្រើសរើសរបាយការណ៍៖", reply_markup=markup)
 
-    print("Bot is running...")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_menu(update, context)
+
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is missing!")
+
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("menu", show_menu))
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+if __name__ == "__main__":
     app.run_polling()
-
-if __name__ == '__main__':
-    main()
