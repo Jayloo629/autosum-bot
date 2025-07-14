@@ -86,9 +86,6 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_menu(update, context)
 
-# Flask app and Telegram bot setup
-from telegram.ext import Application
-
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is missing!")
