@@ -3,8 +3,9 @@ import json
 import os
 import re
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from flask import Flask, request
+from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters, ContextTypes
 
 DATA_FILE = 'income.json'
 
@@ -85,14 +86,27 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_menu(update, context)
 
+# Flask app and Telegram bot setup
+from telegram.ext import Application
+
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is missing!")
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("menu", show_menu))
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+app = Flask(__name__)
+bot = Bot(token=BOT_TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
+
+dispatcher.add_handler(CommandHandler("menu", show_menu))
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return 'OK'
 
 if __name__ == "__main__":
-    app.run_polling()
+    port = int(os.environ.get('PORT', '5000'))
+    app.run(host='0.0.0.0', port=port)
